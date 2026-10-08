@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>麦克风音量可视化 - 弹性小球碰撞</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #0b0f19;
+            color: #f3f4f6;
+            overflow-x: hidden;
+        }
+
+        /* 玻璃拟物态效果 */
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .glass-card {
+            background: rgba(31, 41, 55, 0.5);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* 自定义滑动条样式 */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            height: 6px;
+        }
+        
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #6366f1;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.8);
+            transition: transform 0.1s ease, background 0.2s ease;
+        }
+
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            background: #818cf8;
+        }
+
+        /* 呼吸灯效果 */
+        .pulse-live {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            animation: pulse-red 1.5s infinite cubic-bezier(0.66, 0, 0, 1);
+        }
+
+        @keyframes pulse-red {
+            to {
+                box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+            }
+        }
+
+        canvas {
+            touch-action: none;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-between p-4 md:p-8">
+
+    <!-- 顶部标题栏 -->
+    <header class="w-full max-w-5xl flex flex-col sm:flex-row justify-between items-center gap-4 mb-6 z-10">
+        <div>
+            <h1 class="text-2xl md:text-3xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                麦克风音量可视化 - 弹性碰撞 Engine
+            </h1>
+            <p class="text-xs md:text-sm text-gray-400 mt-1">说话或播放声音，驱动小球碰撞与跃动</p>
+        </div>
+
+        <!-- 状态指示器与主要控制按钮 -->
+        <div class="flex items-center gap-4 glass-panel px-4 py-2 rounded-2xl shadow-lg">
+            <div class="flex items-center gap-2">
+                <span id="status-dot" class="w-3 h-3 rounded-full bg-gray-500"></span>
+                <span id="status-text" class="text-xs text-gray-400 font-medium">未初始化</span>
+            </div>
+            
+            <div class="h-4 w-px bg-gray-700"></div>
+
+            <button id="btn-toggle" class="px-5 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-300 shadow-md bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white flex items-center gap-2">
+                <svg id="icon-mic" class="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+                <span id="btn-text">开启麦克风</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 中央画布展示区域 -->
+    <main class="w-full max-w-5xl relative flex-1 min-h-[380px] md:min-h-[480px] mb-6 rounded-3xl overflow-hidden glass-panel shadow-2xl border border-gray-800 flex flex-col">
+        
+        <!-- 音量实时波形/能量指示条 (顶部悬浮) -->
+        <div class="absolute top-4 left-4 right-4 z-10 flex items-center gap-3 glass-card px-4 py-2.5 rounded-2xl border border-white/5">
+            <span class="text-xs text-gray-400 font-medium whitespace-nowrap">音量强度</span>
+            <div class="w-full bg-gray-800/80 h-3 rounded-full overflow-hidden p-0.5 border border-gray-700/50">
+                <div id="volume-bar" class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-75 w-0"></div>
+            </div>
+            <span id="volume-num" class="text-xs font-mono text-indigo-300 w-10 text-right">0%</span>
+        </div>
+
+        <!-- 物理 Canvas -->
+        <canvas id="physics-canvas" class="w-full h-full flex-1 block cursor-pointer"></canvas>
+
+        <!-- Canvas 浮水印/引导 -->
+        <div id="canvas-overlay" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none transition-opacity duration-500">
+            <div class="p-4 rounded-2xl bg-gray-900/60 backdrop-blur-md border border-gray-800 text-center max-w-xs">
+                <svg class="w-10 h-10 text-indigo-400 mx-auto mb-2 opacity-80 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 016 0v6a3 3 0 01-3 3z"></path>
+                </svg>
+                <p class="text-sm font-medium text-gray-300">点击右上角“开启麦克风”</p>
+                <p class="text-xs text-gray-500 mt-1">发出的声音越大，小球碰撞越剧烈</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- 底部控制与参数调节面板 -->
+    <footer class="w-full max-w-5xl glass-panel rounded-3xl p-4 md:p-6 shadow-xl">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            <!-- 灵敏度调整 -->
+            <div class="flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <label for="sensitivity" class="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        碰撞灵敏度 (音量增益)
+                    </label>
+                    <span id="sensitivity-val" class="text-xs font-mono text-indigo-400 font-bold">2.5x</span>
+                </div>
+                <input type="range" id="sensitivity" min="0.5" max="6.0" step="0.1" value="2.5" class="w-full cursor-pointer">
+                <p class="text-[10px] text-gray-500">调整音量对小球碰撞受力与弹跳冲量的放大倍数</p>
+            </div>
+
+            <!-- 重力 / 浮力系数 -->
+            <div class="flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <label for="gravity" class="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                        环境重力
+                    </label>
+                    <span id="gravity-val" class="text-xs font-mono text-purple-400 font-bold">0.3</span>
+                </div>
+                <input type="range" id="gravity" min="0" max="1.0" step="0.05" value="0.3" class="w-full cursor-pointer">
+                <p class="text-[10px] text-gray-500">设定系统重力大小，数值越大小球回落越快</p>
+            </div>
+
+            <!-- 小球数量与属性 -->
+            <div class="flex flex-col gap-2">
+                <div class="flex justify-between items-center">
+                    <label for="ball-count" class="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
+                        <svg class="w-4 h-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                        小球数量
+                    </label>
+                    <span id="ball-count-val" class="text-xs font-mono text-pink-400 font-bold">35</span>
+                </div>
+                <input type="range" id="ball-count" min="10" max="80" step="1" value="35" class="w-full cursor-pointer">
+                <p class="text-[10px] text-gray-500">动态更改场景中小球的密集程度</p>
+            </div>
+
+        </div>
+    </footer>
+
+    <script>
+        // --- 全局变量状态 ---
+        let audioCtx = null;
+        let analyser = null;
+        let micStream = null;
+        let dataArray = null;
+        let isRecording = false;
+
+        // 参数配置
+        const config = {
+            sensitivity: 2.5,
+            gravity: 0.3,
+            bounce: 0.82,       // 碰撞弹性 (能量保留率)
+            friction: 0.985,    // 空气阻力
+            ballCount: 35
+        };
+
+        // 当前计算出的音量（平滑后）
+        let currentVolume = 0;
+
+        // DOM 元素引用
+        const btnToggle = document.getElementById('btn-toggle');
+        const btnText = document.getElementById('btn-text');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const volumeBar = document.getElementById('volume-bar');
+        const volumeNum = document.getElementById('volume-num');
+        const canvasOverlay = document.getElementById('canvas-overlay');
+        const canvas = document.getElementById('physics-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // 滑块元素
+        const inputSensitivity = document.getElementById('sensitivity');
+        const sensitivityVal = document.getElementById('sensitivity-val');
+        const inputGravity = document.getElementById('gravity');
+        const gravityVal = document.getElementById('gravity-val');
+        const inputBallCount = document.getElementById('ball-count');
+        const ballCountVal = document.getElementById('ball-count-val');
+
+        // 动态调整 Canvas 尺寸
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 颜色调色板
+        const colors = [
+            { r: 99, g: 102, b: 241 },  // Indigo
+            { r: 168, g: 85, b: 247 },  // Purple
+            { r: 236, g: 72, b: 153 },  // Pink
+            { r: 59, g: 130, b: 246 },  // Blue
+            { r: 16, g: 185, b: 129 }   // Emerald
+        ];
+
+        // --- 小球类 (Ball) ---
+        class Ball {
+            constructor(x, y) {
+                this.baseRadius = 12 + Math.random() * 16;
+                this.radius = this.baseRadius;
+                this.x = x || Math.random() * (canvas.width - this.radius * 2) + this.radius;
+                this.y = y || Math.random() * (canvas.height - this.radius * 2) + this.radius;
+                this.vx = (Math.random() - 0.5) * 4;
+                this.vy = (Math.random() - 0.5) * 4;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.mass = this.baseRadius; // 质量与大小成正比
+                this.pulse = 0;              // 受音量驱动的膨胀度
+            }
+
+            update(volume) {
+                // 音量影响膨胀程度
+                const targetPulse = volume * config.sensitivity * 15;
+                this.pulse += (targetPulse - this.pulse) * 0.2; // 平滑过渡
+                this.radius = this.baseRadius + this.pulse;
+
+                // 应用重力
+                this.vy += config.gravity;
+
+                // 应用阻力
+                this.vx *= config.friction;
+                this.vy *= config.friction;
+
+                // 音量触发激荡冲量（声音变大时向上和四周排斥弹跳）
+                if (volume > 0.05) {
+                    const impulse = volume * config.sensitivity * (1.5 + Math.random() * 2);
+                    // 向上为主，带少许横向随机冲量
+                    this.vy -= impulse * (0.8 + Math.random() * 0.4);
+                    this.vx += (Math.random() - 0.5) * impulse * 1.2;
+                }
+
+                // 更新位置
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // 边界碰撞处理
+                if (this.x - this.radius < 0) {
+                    this.x = this.radius;
+                    this.vx = -this.vx * config.bounce;
+                } else if (this.x + this.radius > canvas.width) {
+                    this.x = canvas.width - this.radius;
+                    this.vx = -this.vx * config.bounce;
+                }
+
+                if (this.y - this.radius < 0) {
+                    this.y = this.radius;
+                    this.vy = -this.vy * config.bounce;
+                } else if (this.y + this.radius > canvas.height) {
+                    this.y = canvas.height - this.radius;
+                    this.vy = -this.vy * config.bounce;
+                    // 触底磨擦力
+                    this.vx *= 0.95;
+                }
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, Math.max(1, this.radius), 0, Math.PI * 2);
+                
+                // 放射状发光渐变
+                const gradient = ctx.createRadialGradient(
+                    this.x - this.radius * 0.3,
+                    this.y - this.radius * 0.3,
+                    this.radius * 0.1,
+                    this.x,
+                    this.y,
+                    this.radius
+                );
+
+                const alpha = Math.min(1, 0.7 + (this.pulse / 20));
+                gradient.addColorStop(0, `rgba(${this.color.r + 40}, ${this.color.g + 40}, ${this.color.b + 40}, ${alpha})`);
+                gradient.addColorStop(0.8, `rgba(${this.color.r}, ${this.color.g}, ${this.color.b}, ${alpha * 0.9})`);
+                gradient.addColorStop(1, `rgba(${this.color.r - 30}, ${this.color.g - 30}, ${this.color.b - 30}, 0.2)`);
+
+                ctx.fillStyle = gradient;
+                ctx.shadowColor = `rgba(${this.color.r}, ${this.color.g}, ${this.color.b}, 0.6)`;
+                ctx.shadowBlur = 10 + this.pulse * 2;
+                ctx.fill();
+                ctx.closePath();
+
+                // 重置 canvas shadow 避免性能开销
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        // 初始化小球数组
+        let balls = [];
+        function initBalls(count) {
+            balls = [];
+            for (let i = 0; i < count; i++) {
+                balls.push(new Ball());
+            }
+        }
+        initBalls(config.ballCount);
+
+        // 处理小球之间的弹性碰撞 (完全弹性/非完全弹性物理碰撞)
+        function handleBallCollisions() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const b1 = balls[i];
+                    const b2 = balls[j];
+
+                    const dx = b2.x - b1.x;
+                    const dy = b2.y - b1.y;
+                    const distance = Math.hypot(dx, dy);
+                    const minDist = b1.radius + b2.radius;
+
+                    if (distance < minDist && distance > 0) {
+                        // 1. 重叠分离（防止小球卡在一起）
+                        const overlap = minDist - distance;
+                        const nx = dx / distance;
+                        const ny = dy / distance;
+
+                        // 根据质量比例推开
+                        const mSum = b1.mass + b2.mass;
+                        b1.x -= nx * overlap * (b2.mass / mSum);
+                        b1.y -= ny * overlap * (b2.mass / mSum);
+                        b2.x += nx * overlap * (b1.mass / mSum);
+                        b2.y += ny * overlap * (b1.mass / mSum);
+
+                        // 2. 动量守恒碰撞速度计算
+                        const kx = b1.vx - b2.vx;
+                        const ky = b1.vy - b2.vy;
+                        const p = 2 * (nx * kx + ny * ky) / mSum;
+
+                        // 音量增益碰撞反弹力
+                        const impulseMultiplier = 1 + (currentVolume * config.sensitivity * 0.5);
+
+                        b1.vx -= p * b2.mass * nx * config.bounce * impulseMultiplier;
+                        b1.vy -= p * b2.mass * ny * config.bounce * impulseMultiplier;
+                        b2.vx += p * b1.mass * nx * config.bounce * impulseMultiplier;
+                        b2.vy += p * b1.mass * ny * config.bounce * impulseMultiplier;
+                    }
+                }
+            }
+        }
+
+        // 初始化麦克风音频流
+        async function startAudio() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // 请求麦克风权限
+                micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: false
+                    }
+                });
+
+                const source = audioCtx.createMediaStreamSource(micStream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 512;
+                analyser.smoothingTimeConstant = 0.4; // 敏捷度响应
+
+                source.connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                isRecording = true;
+                updateUIState(true);
+            } catch (err) {
+                console.error("无法获取麦克风:", err);
+                alert("无法访问麦克风，请检查浏览器权限设置！");
+                stopAudio();
+            }
+        }
+
+        // 停止音频采集
+        function stopAudio() {
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
+            }
+            if (audioCtx && audioCtx.state !== 'closed') {
+                audioCtx.close();
+                audioCtx = null;
+            }
+            isRecording = false;
+            currentVolume = 0;
+            updateUIState(false);
+        }
+
+        // 计算当前输入的音量响度 (RMS 均方根)
+        function calculateVolume() {
+            if (!analyser || !isRecording) return 0;
+
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            // 归一化到 0 - 1
+            const average = sum / dataArray.length;
+            return Math.min(1, average / 128);
+        }
+
+        // 渲染与主循环
+        function animate() {
+            // 获取当前音量
+            if (isRecording) {
+                const rawVol = calculateVolume();
+                // 缓动平滑音量
+                currentVolume += (rawVol - currentVolume) * 0.3;
+            } else {
+                currentVolume *= 0.9; // 衰减
+            }
+
+            // 更新音量指示条 UI
+            const volPercent = Math.min(100, Math.round(currentVolume * config.sensitivity * 100));
+            volumeBar.style.width = `${volPercent}%`;
+            volumeNum.textContent = `${volPercent}%`;
+
+            // 清屏背景（微弱拖尾效果）
+            ctx.fillStyle = 'rgba(11, 15, 25, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 更新与绘制小球
+            balls.forEach(ball => {
+                ball.update(currentVolume);
+            });
+
+            // 处理碰撞
+            handleBallCollisions();
+
+            // 绘制小球
+            balls.forEach(ball => {
+                ball.draw(ctx);
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        // 启动主动画循环
+        animate();
+
+        // 更新界面的录制状态
+        function updateUIState(active) {
+            if (active) {
+                statusDot.className = "w-3 h-3 rounded-full bg-red-500 pulse-live";
+                statusText.textContent = "录制中...";
+                statusText.className = "text-xs text-red-400 font-medium";
+                btnText.textContent = "停止录制";
+                btnToggle.className = "px-5 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-300 shadow-lg bg-red-600 hover:bg-red-500 active:scale-95 text-white flex items-center gap-2";
+                canvasOverlay.style.opacity = "0";
+            } else {
+                statusDot.className = "w-3 h-3 rounded-full bg-gray-500";
+                statusText.textContent = "已停止";
+                statusText.className = "text-xs text-gray-400 font-medium";
+                btnText.textContent = "开启麦克风";
+                btnToggle.className = "px-5 py-2 rounded-xl text-xs font-semibold tracking-wider transition-all duration-300 shadow-md bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white flex items-center gap-2";
+                canvasOverlay.style.opacity = "1";
+            }
+        }
+
+        // 按钮点击监听
+        btnToggle.addEventListener('click', () => {
+            if (!isRecording) {
+                startAudio();
+            } else {
+                stopAudio();
+            }
+        });
+
+        // 滑块参数监听
+        inputSensitivity.addEventListener('input', (e) => {
+            config.sensitivity = parseFloat(e.target.value);
+            sensitivityVal.textContent = `${config.sensitivity.toFixed(1)}x`;
+        });
+
+        inputGravity.addEventListener('input', (e) => {
+            config.gravity = parseFloat(e.target.value);
+            gravityVal.textContent = config.gravity.toFixed(2);
+        });
+
+        inputBallCount.addEventListener('input', (e) => {
+            const count = parseInt(e.target.value, 10);
+            config.ballCount = count;
+            ballCountVal.textContent = count;
+            initBalls(count);
+        });
+
+        // 允许用户在 Canvas 上点击产生爆炸冲击波（交互体验）
+        canvas.addEventListener('pointerdown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            balls.forEach(ball => {
+                const dx = ball.x - clickX;
+                const dy = ball.y - clickY;
+                const dist = Math.hypot(dx, dy);
+                if (dist < 200) {
+                    const force = (200 - dist) / 200 * 15;
+                    const angle = Math.atan2(dy, dx);
+                    ball.vx += Math.cos(angle) * force;
+                    ball.vy += Math.sin(angle) * force;
+                }
+            });
+        });
+    </script>
+</body>
+</html>
